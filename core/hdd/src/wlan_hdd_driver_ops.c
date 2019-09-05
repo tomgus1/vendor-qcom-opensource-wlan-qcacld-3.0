@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2019 The Linux Foundation. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -403,10 +403,14 @@ static int wlan_hdd_probe(struct device *dev, void *bdev, const struct hif_bus_i
 	if (ret)
 		goto err_hdd_deinit;
 
-
-	if (reinit) {
-		cds_set_recovery_in_progress(false);
-	} else {
+	/*
+	 * Recovery in progress flag will be set if SSR triggered.
+	 * If SSR is triggered during Load time, this flag will be set
+	 * so reset of this flag should be done in both the cases,
+	 * during load time and during re-init
+	 */
+	cds_set_recovery_in_progress(false);
+	if (!reinit) {
 		cds_set_load_in_progress(false);
 		cds_set_driver_loaded(true);
 		hdd_start_complete(0);
@@ -429,10 +433,10 @@ err_hdd_deinit:
 	    re_init_fail_cnt >= SSR_MAX_FAIL_CNT)
 		QDF_BUG(0);
 
-	if (reinit) {
+	cds_set_recovery_in_progress(false);
+	if (reinit)
 		cds_set_driver_in_bad_state(true);
-		cds_set_recovery_in_progress(false);
-	} else
+	else
 		cds_set_load_in_progress(false);
 
 err_init_qdf_ctx:
@@ -1153,6 +1157,12 @@ static int wlan_hdd_pld_probe(struct device *dev,
 		return -EINVAL;
 	}
 
+	/*
+	 * If PLD_RECOVERY is received before probe then clear
+	 * CDS_DRIVER_STATE_RECOVERING.
+	 */
+	cds_set_recovery_in_progress(false);
+
 	return wlan_hdd_probe(dev, bdev, id, bus_type, false);
 }
 
@@ -1367,11 +1377,11 @@ static void hdd_cleanup_on_fw_down(void)
 	ENTER();
 
 	hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
-	qdf_complete_wait_events();
 	cds_set_target_ready(false);
 	if (hdd_ctx != NULL)
 		hdd_cleanup_scan_queue(hdd_ctx, NULL);
 	wlan_hdd_purge_notifier();
+	qdf_complete_wait_events();
 
 	EXIT();
 }
@@ -1437,6 +1447,7 @@ static void wlan_hdd_pld_uevent(struct device *dev,
 		cds_set_target_ready(false);
 		hdd_pld_ipa_uc_shutdown_pipes();
 		wlan_hdd_purge_notifier();
+		qdf_complete_wait_events();
 		break;
 	case PLD_FW_DOWN:
 		hdd_cleanup_on_fw_down();
